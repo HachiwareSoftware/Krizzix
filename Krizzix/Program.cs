@@ -28,6 +28,26 @@ namespace Krizzix
                 return;
             }
 
+            if (options.ShowHiddenWindows)
+            {
+                ShowConfiguredWindows(logger);
+                return;
+            }
+
+            if (options.HideTaskbar)
+            {
+                int hidden = TaskbarVisibilityService.HideTaskbars(logger);
+                logger.Info("Hidden taskbars: " + hidden);
+                return;
+            }
+
+            if (options.ShowTaskbar)
+            {
+                int shown = TaskbarVisibilityService.ShowTaskbars(logger);
+                logger.Info("Shown taskbars: " + shown);
+                return;
+            }
+
             try
             {
                 System.Windows.Forms.Application.EnableVisualStyles();
@@ -51,6 +71,14 @@ namespace Krizzix
                 new System.Windows.Application { ShutdownMode = System.Windows.ShutdownMode.OnExplicitShutdown };
 
             new SettingsWindow(configManager).ShowDialog();
+        }
+
+        private static void ShowConfiguredWindows(AppLogger logger)
+        {
+            var configManager = new ConfigManager(logger);
+            WindowHiderConfig config = configManager.LoadOrCreateDefault();
+            int shown = WindowHiderService.ShowConfiguredWindows(config, logger);
+            logger.Info("Shown windows: " + shown);
         }
     }
 }

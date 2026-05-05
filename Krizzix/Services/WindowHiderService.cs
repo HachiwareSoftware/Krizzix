@@ -32,6 +32,12 @@ namespace Krizzix.Services
             _foregroundEventProc = OnForegroundEvent;
         }
 
+        public static int ShowConfiguredWindows(WindowHiderConfig config, AppLogger logger)
+        {
+            var service = new WindowHiderService((config ?? WindowHiderConfig.CreateDefault()).Normalize(), logger);
+            return service.ShowMatchingWindows();
+        }
+
         public void Start()
         {
             if (_running)
@@ -242,6 +248,64 @@ namespace Krizzix.Services
             return true;
         }
 
+        private int ShowMatchingWindows()
+        {
+            var processedWindows = new HashSet<IntPtr>();
+            int shownCount = 0;
+
+            NativeMethods.EnumWindows((hwnd, lParam) =>
+            {
+                shownCount += TryShowWindowFamily(hwnd, processedWindows);
+                return true;
+            }, IntPtr.Zero);
+
+            IntPtr current = IntPtr.Zero;
+            while ((current = NativeMethods.FindWindowExW(IntPtr.Zero, current, IntPtr.Zero, IntPtr.Zero)) != IntPtr.Zero)
+                shownCount += TryShowWindowFamily(current, processedWindows);
+
+            return shownCount;
+        }
+
+        private int TryShowWindowFamily(IntPtr hwnd, HashSet<IntPtr> processedWindows)
+        {
+            int shownCount = TryShow(hwnd, processedWindows) ? 1 : 0;
+
+            IntPtr root = NativeMethods.GetAncestor(hwnd, NativeMethods.GA_ROOT);
+            if (root != IntPtr.Zero && root != hwnd)
+                shownCount += TryShow(root, processedWindows) ? 1 : 0;
+
+            IntPtr rootOwner = NativeMethods.GetAncestor(hwnd, NativeMethods.GA_ROOTOWNER);
+            if (rootOwner != IntPtr.Zero && rootOwner != hwnd && rootOwner != root)
+                shownCount += TryShow(rootOwner, processedWindows) ? 1 : 0;
+
+            return shownCount;
+        }
+
+        private bool TryShow(IntPtr hwnd, HashSet<IntPtr> processedWindows)
+        {
+            if (hwnd == IntPtr.Zero || processedWindows.Contains(hwnd) || !NativeMethods.IsWindow(hwnd))
+                return false;
+
+            uint processId;
+            NativeMethods.GetWindowThreadProcessId(hwnd, out processId);
+            if (processId == 0)
+                return false;
+
+            string processName = GetCachedProcessName(processId);
+            if (!_config.MatchesProcessName(processName))
+                return false;
+
+            processedWindows.Add(hwnd);
+            bool wasHidden = !NativeMethods.IsWindowVisible(hwnd);
+            RestoreToTaskbar(hwnd);
+            NativeMethods.ShowWindow(hwnd, NativeMethods.SW_SHOW);
+
+            if (wasHidden && _logger.DebugEnabled)
+                _logger.Info("Shown window: " + processName + " pid=" + processId + " hwnd=0x" + hwnd.ToInt64().ToString("X") + " title=\"" + GetTitle(hwnd) + "\"");
+
+            return wasHidden;
+        }
+
         private bool ShouldLogHide(IntPtr hwnd)
         {
             lock (_sync)
@@ -296,6 +360,30 @@ namespace Krizzix.Services
             style &= ~NativeMethods.WS_EX_APPWINDOW;
             style |= NativeMethods.WS_EX_TOOLWINDOW;
             NativeMethods.SetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE, new IntPtr(style));
+            RefreshFrame(hwnd);
+        }
+
+        private static void RestoreToTaskbar(IntPtr hwnd)
+        {
+            IntPtr stylePtr = NativeMethods.GetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE);
+            long style = stylePtr.ToInt64();
+            style &= ~NativeMethods.WS_EX_TOOLWINDOW;
+            style |= NativeMethods.WS_EX_APPWINDOW;
+            NativeMethods.SetWindowLongPtr(hwnd, NativeMethods.GWL_EXSTYLE, new IntPtr(style));
+            RefreshFrame(hwnd);
+        }
+
+        private static void RefreshFrame(IntPtr hwnd)
+        {
+            NativeMethods.SetWindowPos(
+                hwnd,
+                NativeMethods.HWND_TOP,
+                0,
+                0,
+                0,
+                0,
+                NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOZORDER |
+                NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_FRAMECHANGED);
         }
 
         private static string GetTitle(IntPtr hwnd)

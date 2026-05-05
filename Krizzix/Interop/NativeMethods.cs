@@ -14,12 +14,19 @@ namespace Krizzix.Interop
         public const int CHILDID_SELF = 0;
 
         public const int SW_HIDE = 0;
+        public const int SW_SHOW = 5;
         public const int GWL_EXSTYLE = -20;
         public const int WS_EX_APPWINDOW = 0x00040000;
         public const int WS_EX_TOOLWINDOW = 0x00000080;
         public const uint FLASHW_STOP = 0;
         public const uint GA_ROOT = 2;
         public const uint GA_ROOTOWNER = 3;
+        public static readonly IntPtr HWND_TOP = IntPtr.Zero;
+        public const uint SWP_NOSIZE = 0x0001;
+        public const uint SWP_NOMOVE = 0x0002;
+        public const uint SWP_NOZORDER = 0x0004;
+        public const uint SWP_NOACTIVATE = 0x0010;
+        public const uint SWP_FRAMECHANGED = 0x0020;
 
         public const uint TH32CS_SNAPPROCESS = 0x00000002;
         public static readonly IntPtr INVALID_HANDLE_VALUE = new IntPtr(-1);
@@ -77,6 +84,12 @@ namespace Krizzix.Interop
         [DllImport("user32.dll")]
         public static extern IntPtr FindWindowExW(IntPtr hwndParent, IntPtr hwndChildAfter, IntPtr lpszClass, IntPtr lpszWindow);
 
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        public static extern IntPtr FindWindowW(string lpClassName, string lpWindowName);
+
+        [DllImport("user32.dll", EntryPoint = "FindWindowExW", CharSet = CharSet.Unicode, SetLastError = true)]
+        public static extern IntPtr FindWindowExW(IntPtr hwndParent, IntPtr hwndChildAfter, string lpszClass, string lpszWindow);
+
         [DllImport("user32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool IsWindow(IntPtr hWnd);
@@ -111,11 +124,18 @@ namespace Krizzix.Interop
 
         [DllImport("user32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]
-        public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
-
-        [DllImport("user32.dll")]
-        [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool FlashWindowEx(ref FLASHWINFO pwfi);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool SetWindowPos(
+            IntPtr hWnd,
+            IntPtr hWndInsertAfter,
+            int x,
+            int y,
+            int cx,
+            int cy,
+            uint flags);
 
         [DllImport("user32.dll", EntryPoint = "GetWindowLong", SetLastError = true)]
         private static extern int GetWindowLong32(IntPtr hWnd, int nIndex);
