@@ -201,7 +201,7 @@ namespace Krizzix.Services
         {
             try
             {
-                int[] delays = { 0, 10, 25, 50 };
+                int[] delays = { 0, 10, 10, 10 };
                 foreach (int delay in delays)
                 {
                     if (!_running)
