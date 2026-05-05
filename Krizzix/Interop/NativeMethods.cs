@@ -111,6 +111,10 @@ namespace Krizzix.Interop
 
         [DllImport("user32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool FlashWindowEx(ref FLASHWINFO pwfi);
 
         [DllImport("user32.dll", EntryPoint = "GetWindowLong", SetLastError = true)]

@@ -13,7 +13,11 @@ namespace Krizzix.Services
         public AppLogger(bool debugEnabled)
         {
             DebugEnabled = debugEnabled;
-            _logPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "krizzix.log");
+            string logDir = Path.Combine(Directory.GetCurrentDirectory(), "logs");
+            Directory.CreateDirectory(logDir);
+
+            string fileName = "krizzix-" + DateTime.Now.ToString("yyMMdd-HHmmss") + ".log";
+            _logPath = Path.Combine(logDir, fileName);
         }
 
         public void Info(string message)

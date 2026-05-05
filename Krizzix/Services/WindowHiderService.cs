@@ -12,7 +12,9 @@ namespace Krizzix.Services
         private readonly object _sync = new object();
         private readonly AppLogger _logger;
         private readonly ProcessNameResolver _processNameResolver = new ProcessNameResolver();
-        private readonly HashSet<IntPtr> _activeRetries = new HashSet<IntPtr>();
+        private readonly HashSet<IntPtr> _queuedWindows = new HashSet<IntPtr>();
+        private readonly Dictionary<IntPtr, DateTime> _lastHideLogTimes = new Dictionary<IntPtr, DateTime>();
+        private readonly Dictionary<uint, string> _processNameCache = new Dictionary<uint, string>();
         private readonly NativeMethods.WinEventProc _windowEventProc;
         private readonly NativeMethods.WinEventProc _foregroundEventProc;
         private WindowHiderConfig _config;
@@ -64,12 +66,24 @@ namespace Krizzix.Services
                 _foregroundHook = IntPtr.Zero;
             }
 
+            lock (_sync)
+            {
+                _queuedWindows.Clear();
+                _lastHideLogTimes.Clear();
+                _processNameCache.Clear();
+            }
+
             _logger.Info("Window hider service stopped.");
         }
 
         public void UpdateConfig(WindowHiderConfig config)
         {
             _config = (config ?? WindowHiderConfig.CreateDefault()).Normalize();
+            lock (_sync)
+            {
+                _lastHideLogTimes.Clear();
+                _processNameCache.Clear();
+            }
             if (_pollTimer != null)
                 _pollTimer.Change(_config.polling_interval_ms, _config.polling_interval_ms);
             ScanAllWindows();
@@ -107,7 +121,7 @@ namespace Krizzix.Services
             if (!_running || idObject != NativeMethods.OBJID_WINDOW || idChild != NativeMethods.CHILDID_SELF || hwnd == IntPtr.Zero)
                 return;
 
-            QueueWindowFamily(hwnd);
+            HideWindowFamily(hwnd, true);
         }
 
         private void OnForegroundEvent(IntPtr hook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint eventThread, uint eventTime)
@@ -115,7 +129,7 @@ namespace Krizzix.Services
             if (!_running || hwnd == IntPtr.Zero)
                 return;
 
-            QueueWindowFamily(hwnd);
+            HideWindowFamily(hwnd, true);
         }
 
         private void ScanAllWindows()
@@ -127,13 +141,13 @@ namespace Krizzix.Services
             {
                 NativeMethods.EnumWindows((hwnd, lParam) =>
                 {
-                    QueueWindowFamily(hwnd);
+                    HideWindowFamily(hwnd, false);
                     return true;
                 }, IntPtr.Zero);
 
                 IntPtr current = IntPtr.Zero;
                 while ((current = NativeMethods.FindWindowExW(IntPtr.Zero, current, IntPtr.Zero, IntPtr.Zero)) != IntPtr.Zero)
-                    QueueWindowFamily(current);
+                    HideWindowFamily(current, false);
             }
             catch (Exception ex)
             {
@@ -141,17 +155,25 @@ namespace Krizzix.Services
             }
         }
 
-        private void QueueWindowFamily(IntPtr hwnd)
+        private void HideWindowFamily(IntPtr hwnd, bool queueRetry)
         {
-            QueueHide(hwnd);
+            TryHideOrQueue(hwnd, queueRetry);
 
             IntPtr root = NativeMethods.GetAncestor(hwnd, NativeMethods.GA_ROOT);
             if (root != IntPtr.Zero && root != hwnd)
-                QueueHide(root);
+                TryHideOrQueue(root, queueRetry);
 
             IntPtr rootOwner = NativeMethods.GetAncestor(hwnd, NativeMethods.GA_ROOTOWNER);
             if (rootOwner != IntPtr.Zero && rootOwner != hwnd && rootOwner != root)
-                QueueHide(rootOwner);
+                TryHideOrQueue(rootOwner, queueRetry);
+        }
+
+        private void TryHideOrQueue(IntPtr hwnd, bool queueRetry)
+        {
+            if (TryHide(hwnd) || !queueRetry)
+                return;
+
+            QueueHide(hwnd);
         }
 
         private void QueueHide(IntPtr hwnd)
@@ -161,9 +183,9 @@ namespace Krizzix.Services
 
             lock (_sync)
             {
-                if (_activeRetries.Contains(hwnd))
+                if (_queuedWindows.Contains(hwnd))
                     return;
-                _activeRetries.Add(hwnd);
+                _queuedWindows.Add(hwnd);
             }
 
             ThreadPool.QueueUserWorkItem(_ => RetryHide(hwnd));
@@ -173,45 +195,85 @@ namespace Krizzix.Services
         {
             try
             {
-                int[] delays = { 0, 50, 100, 200, 400, 800 };
+                int[] delays = { 0, 10, 25, 50 };
                 foreach (int delay in delays)
                 {
                     if (!_running)
                         return;
                     if (delay > 0)
                         Thread.Sleep(delay);
-                    TryHide(hwnd);
+                    if (TryHide(hwnd))
+                        return;
                 }
             }
             finally
             {
                 lock (_sync)
                 {
-                    _activeRetries.Remove(hwnd);
+                    _queuedWindows.Remove(hwnd);
                 }
             }
         }
 
-        private void TryHide(IntPtr hwnd)
+        private bool TryHide(IntPtr hwnd)
         {
             if (hwnd == IntPtr.Zero || !NativeMethods.IsWindow(hwnd))
-                return;
+                return false;
+
+            if (!NativeMethods.IsWindowVisible(hwnd))
+                return false;
 
             uint processId;
             NativeMethods.GetWindowThreadProcessId(hwnd, out processId);
             if (processId == 0)
-                return;
+                return false;
 
-            string processName = _processNameResolver.GetProcessName(processId);
+            string processName = GetCachedProcessName(processId);
             if (!_config.MatchesProcessName(processName))
-                return;
+                return false;
 
             StopFlash(hwnd);
-            NativeMethods.ShowWindow(hwnd, NativeMethods.SW_HIDE);
+            bool wasVisible = NativeMethods.ShowWindow(hwnd, NativeMethods.SW_HIDE);
             HideFromTaskbar(hwnd);
 
-            if (_logger.DebugEnabled)
+            if (wasVisible && _logger.DebugEnabled && ShouldLogHide(hwnd))
                 _logger.Info("Hidden window: " + processName + " pid=" + processId + " hwnd=0x" + hwnd.ToInt64().ToString("X") + " title=\"" + GetTitle(hwnd) + "\"");
+
+            return true;
+        }
+
+        private bool ShouldLogHide(IntPtr hwnd)
+        {
+            lock (_sync)
+            {
+                DateTime now = DateTime.UtcNow;
+                DateTime lastLogged;
+                if (_lastHideLogTimes.TryGetValue(hwnd, out lastLogged)
+                    && (now - lastLogged).TotalMilliseconds < 500)
+                    return false;
+
+                _lastHideLogTimes[hwnd] = now;
+                return true;
+            }
+        }
+
+        private string GetCachedProcessName(uint processId)
+        {
+            lock (_sync)
+            {
+                string cached;
+                if (_processNameCache.TryGetValue(processId, out cached))
+                    return cached;
+            }
+
+            string processName = _processNameResolver.GetProcessName(processId);
+
+            lock (_sync)
+            {
+                _processNameCache[processId] = processName;
+            }
+
+            return processName;
         }
 
         private static void StopFlash(IntPtr hwnd)
