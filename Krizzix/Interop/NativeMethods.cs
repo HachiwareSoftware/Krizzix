@@ -30,11 +30,6 @@ namespace Krizzix.Interop
         public const uint SWP_SHOWWINDOW = 0x0040;
         public const uint SWP_HIDEWINDOW = 0x0080;
 
-        public const uint ABM_GETSTATE = 0x00000004;
-        public const uint ABM_SETSTATE = 0x0000000A;
-        public const int ABS_AUTOHIDE = 0x0000001;
-        public const int ABS_ALWAYSONTOP = 0x0000002;
-
         public const uint TH32CS_SNAPPROCESS = 0x00000002;
         public static readonly IntPtr INVALID_HANDLE_VALUE = new IntPtr(-1);
 
@@ -74,26 +69,6 @@ namespace Krizzix.Interop
 
             [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
             public string szExeFile;
-        }
-
-        [StructLayout(LayoutKind.Sequential)]
-        public struct RECT
-        {
-            public int Left;
-            public int Top;
-            public int Right;
-            public int Bottom;
-        }
-
-        [StructLayout(LayoutKind.Sequential)]
-        public struct APPBARDATA
-        {
-            public uint cbSize;
-            public IntPtr hWnd;
-            public uint uCallbackMessage;
-            public uint uEdge;
-            public RECT rc;
-            public IntPtr lParam;
         }
 
         [DllImport("kernel32.dll")]
@@ -163,9 +138,6 @@ namespace Krizzix.Interop
             int cx,
             int cy,
             uint flags);
-
-        [DllImport("shell32.dll", SetLastError = true)]
-        public static extern IntPtr SHAppBarMessage(uint dwMessage, ref APPBARDATA pData);
 
         [DllImport("user32.dll", EntryPoint = "GetWindowLong", SetLastError = true)]
         private static extern int GetWindowLong32(IntPtr hWnd, int nIndex);
